@@ -214,8 +214,37 @@
         position: relative;
       }
 
+      .product-top {
+        display: flex;
+        gap: 0.6rem;
+        align-items: flex-start;
+      }
+
+      .product-thumb {
+        width: 54px;
+        height: 54px;
+        object-fit: cover;
+        border-radius: 8px;
+        border: 1px solid #d5e8e1;
+        background: #fff;
+        flex: 0 0 auto;
+      }
+
+      .product-main {
+        min-width: 0;
+      }
+
       .products strong {
         font-size: 0.88rem;
+      }
+
+      .product-title-link {
+        color: #143f38;
+        text-decoration: none;
+      }
+
+      .product-title-link:hover {
+        text-decoration: underline;
       }
 
       .products p {
@@ -228,6 +257,35 @@
         margin-top: 0.2rem;
         color: #55736c;
         font-size: 0.78rem;
+      }
+
+      .product-links {
+        margin-top: 0.22rem;
+        display: flex;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+      }
+
+      .product-links a {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: #1f5f53;
+        text-decoration: none;
+        border: 1px solid #bde3d7;
+        background: #fff;
+        padding: 0.1rem 0.35rem;
+        border-radius: 7px;
+      }
+
+      .product-links a:hover {
+        text-decoration: underline;
+      }
+
+      .amazon-rank {
+        margin-top: 0.2rem;
+        color: #7a4a00;
+        font-size: 0.77rem;
+        font-weight: 700;
       }
 
       .hover-trigger {
@@ -477,8 +535,32 @@
                   <ul class="products">
                     {% for prod in ing.products|slice:":5" %}
                     <li>
-                      <strong>{{ prod.brand_name|default:"Unknown Product" }}</strong>
-                      <p class="product-meta">Manufacturer: {{ prod.manufacturer_name|default:"Unknown Manufacturer" }}</p>
+                      <div class="product-top">
+                        {% if prod.amazon_image_url %}
+                        <img class="product-thumb" src="{{ prod.amazon_image_url }}" alt="{{ prod.brand_name|default:'OTC Product' }} image" loading="lazy" />
+                        {% endif %}
+                        <div class="product-main">
+                          {% if prod.amazon_url %}
+                          <strong><a class="product-title-link" href="{{ prod.amazon_url }}" target="_blank" rel="noopener noreferrer">{{ prod.brand_name|default:"Unknown Product" }}</a></strong>
+                          {% elif prod.dailymed_url %}
+                          <strong><a class="product-title-link" href="{{ prod.dailymed_url }}" target="_blank" rel="noopener noreferrer">{{ prod.brand_name|default:"Unknown Product" }}</a></strong>
+                          {% else %}
+                          <strong>{{ prod.brand_name|default:"Unknown Product" }}</strong>
+                          {% endif %}
+                          <p class="product-meta">Manufacturer: {{ prod.manufacturer_name|default:"Unknown Manufacturer" }}</p>
+                          <p class="product-links">
+                            {% if prod.amazon_url %}
+                            <a href="{{ prod.amazon_url }}" target="_blank" rel="noopener noreferrer">아마존 상세</a>
+                            {% endif %}
+                            {% if prod.dailymed_url %}
+                            <a href="{{ prod.dailymed_url }}" target="_blank" rel="noopener noreferrer">DailyMed 정보</a>
+                            {% endif %}
+                          </p>
+                        </div>
+                      </div>
+                      {% if prod.amazon_rank_label %}
+                      <p class="amazon-rank">Amazon BSR: {{ prod.amazon_rank_label }}</p>
+                      {% endif %}
                       <p>{{ prod.summary_kr|default:"효능 요약 정보를 불러오지 못했습니다. 복용 전 용법·용량과 주의사항을 확인하세요." }}</p>
                       {% if prod.other_active_components %}
                       <span class="hover-trigger">추가 주성분 보기</span>
@@ -578,6 +660,10 @@
         const items = products.slice(0, 5).map((prod) => {
           const brand = escapeHtml(prod.brand_name);
           const manufacturer = escapeHtml(prod.manufacturer_name || "Unknown Manufacturer");
+          const rankLabel = escapeHtml(prod.amazon_rank_label || "");
+          const amazonUrl = escapeHtml(prod.amazon_url || "");
+          const dailymedUrl = escapeHtml(prod.dailymed_url || "");
+          const imageUrl = escapeHtml(prod.amazon_image_url || "");
           const summaryKr = escapeHtml(
             prod.summary_kr || "효능 요약 정보를 불러오지 못했습니다. 복용 전 용법·용량과 주의사항을 확인하세요."
           );
@@ -595,7 +681,28 @@
               </div>
             `
             : "";
-          return `<li><strong>${brand}</strong><p class="product-meta">Manufacturer: ${manufacturer}</p><p>${summaryKr}</p>${extrasHtml}</li>`;
+          const rankHtml = rankLabel
+            ? `<p class="amazon-rank">Amazon BSR: ${rankLabel}</p>`
+            : "";
+          const titleUrl = amazonUrl || dailymedUrl;
+          const titleHtml = titleUrl
+            ? `<strong><a class="product-title-link" href="${titleUrl}" target="_blank" rel="noopener noreferrer">${brand}</a></strong>`
+            : `<strong>${brand}</strong>`;
+          const imageHtml = imageUrl
+            ? `<img class="product-thumb" src="${imageUrl}" alt="${brand} image" loading="lazy" />`
+            : "";
+          const linkButtons = [
+            amazonUrl
+              ? `<a href="${amazonUrl}" target="_blank" rel="noopener noreferrer">아마존 상세</a>`
+              : "",
+            dailymedUrl
+              ? `<a href="${dailymedUrl}" target="_blank" rel="noopener noreferrer">DailyMed 정보</a>`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("");
+          const linksHtml = linkButtons ? `<p class="product-links">${linkButtons}</p>` : "";
+          return `<li><div class="product-top">${imageHtml}<div class="product-main">${titleHtml}<p class="product-meta">Manufacturer: ${manufacturer}</p>${linksHtml}</div></div>${rankHtml}<p>${summaryKr}</p>${extrasHtml}</li>`;
         }).join("");
 
         slot.innerHTML = `<h3 class="section-title">추천 OTC 제품</h3><ul class="products">${items}</ul>`;

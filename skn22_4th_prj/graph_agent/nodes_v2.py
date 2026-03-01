@@ -18,7 +18,7 @@ SYMPTOM_TO_FDA_TERMS = {
     "두통": ["headache", "pain relief"],
     "편두통": ["migraine", "headache"],
     "알레르기": ["allergy", "allergic reaction", "antihistamine"],
-    "기침": ["cough"],
+    "기침": ["cough", "cold", "nasal congestion", "sinus congestion"],
     "감기": ["cold"],
     "발열": ["fever"],
     "소화불량": ["indigestion"],
@@ -35,6 +35,21 @@ def _to_fda_symptom_terms(symptom_term: str):
     if not token:
         return []
     return SYMPTOM_TO_FDA_TERMS.get(token, [])
+
+
+def _merge_unique_terms(*groups):
+    merged = []
+    seen = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for value in group:
+            token = str(value or "").strip().lower()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            merged.append(token)
+    return merged
 
 
 def _has_user_risk_profile(user_profile):
@@ -167,6 +182,21 @@ async def retrieve_data_node(state: AgentState) -> AgentState:
             max_rows=5000,
         )
         all_ingredients = [item["ingredient"] for item in ranked_ingredients]
+        eng_kw = _to_fda_symptom_terms(db_symptom_term)
+        if not eng_kw:
+            eng_kw = _to_fda_symptom_terms(keyword)
+        if not eng_kw:
+            eng_kw = ["pain"]
+        synonyms = await AIService.get_symptom_synonyms(keyword or query)
+        search_terms = _merge_unique_terms(eng_kw, synonyms)
+        logger.info(
+            "FDA symptom ingredient terms: %s",
+            ", ".join(search_terms),
+        )
+        fda_candidates = await DrugService.get_ingrs_from_fda_by_symptoms(
+            search_terms
+        )
+        fda_candidates = canonicalize_ingredient_list(fda_candidates)
 
         if ranked_ingredients:
             merged_scores = {}
@@ -199,25 +229,35 @@ async def retrieve_data_node(state: AgentState) -> AgentState:
                     for item in scored_candidates
                     if item.get("ingredient")
                 ][:10]
+            if selected_ingredients and fda_candidates:
+                selected_ingredients = canonicalize_ingredient_list(
+                    selected_ingredients
+                )[:10]
+                overlap = set(selected_ingredients).intersection(set(fda_candidates))
+                fda_unique = [ingr for ingr in fda_candidates if ingr not in selected_ingredients]
+                supplement_slots = min(3, len(fda_unique))
+                if supplement_slots > 0:
+                    db_keep = max(10 - supplement_slots, 0)
+                    merged_selected = selected_ingredients[:db_keep] + fda_unique[:supplement_slots]
+                    for token in selected_ingredients[db_keep:]:
+                        if token not in merged_selected:
+                            merged_selected.append(token)
+                    for token in fda_unique[supplement_slots:]:
+                        if token not in merged_selected:
+                            merged_selected.append(token)
+                    selected_ingredients = canonicalize_ingredient_list(merged_selected)[:10]
+                    logger.info(
+                        "Symptom candidate supplementation applied: overlap=%d supplemented=%d",
+                        len(overlap),
+                        supplement_slots,
+                    )
 
         if not selected_ingredients:
             logger.info(
                 f"DB symptom search returned no ingredients for '{db_symptom_term}'. "
                 "Falling back to FDA symptom ingredient search."
             )
-            eng_kw = _to_fda_symptom_terms(db_symptom_term)
-            if not eng_kw:
-                eng_kw = _to_fda_symptom_terms(keyword)
-            if not eng_kw:
-                eng_kw = ["pain"]
-            all_ingredients = await DrugService.get_ingrs_from_fda_by_symptoms(eng_kw)
-
-            if not all_ingredients:
-                synonyms = await AIService.get_symptom_synonyms(keyword or query)
-                if synonyms:
-                    all_ingredients = await DrugService.get_ingrs_from_fda_by_symptoms(
-                        synonyms
-                    )
+            all_ingredients = list(fda_candidates)
 
             if not all_ingredients:
                 all_ingredients = await AIService.recommend_ingredients_for_symptom(
@@ -227,7 +267,9 @@ async def retrieve_data_node(state: AgentState) -> AgentState:
             all_ingredients = canonicalize_ingredient_list(all_ingredients)
             selected_ingredients = all_ingredients[:10]
         else:
-            all_ingredients = [item["ingredient"] for item in scored_candidates]
+            all_ingredients = canonicalize_ingredient_list(
+                [item["ingredient"] for item in scored_candidates] + list(fda_candidates)
+            )
 
         fda_ingredients = selected_ingredients[:5]
         backup_ingredients = selected_ingredients[5:10]
@@ -236,6 +278,14 @@ async def retrieve_data_node(state: AgentState) -> AgentState:
             f"Symptom raw='{query}', db_term='{db_symptom_term}', keyword='{keyword}' "
             f"ingredients extracted={len(all_ingredients)}, "
             f"primary_targets={len(fda_ingredients)}, backup_targets={len(backup_ingredients)}"
+        )
+        logger.info(
+            "Symptom selected ingredients (top10): %s",
+            ", ".join(selected_ingredients) if selected_ingredients else "(none)",
+        )
+        logger.info(
+            "Symptom FDA candidates (top10): %s",
+            ", ".join(fda_candidates[:10]) if fda_candidates else "(none)",
         )
 
         return {
